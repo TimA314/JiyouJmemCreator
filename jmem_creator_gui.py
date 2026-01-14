@@ -411,15 +411,13 @@ class TrainingWorker(QThread):
         self.log(f"Lessons: {len(lesson_ids)}, Items: {total_items}")
 
         # Initialize brain
-        # Use text mode for JMEM training (optimized for text-only, fits on GPU)
         device = 'cuda' if self.use_gpu else 'cpu'
-        self.log(f"Initializing brain ({device.upper()} mode)...")
+        self.log(f"Initializing brain ({device.upper()})...")
         self.brain = BrainAPI.create(
-            mode='text',  # Text mode for JMEM training
             device=device,
             cpu_neurons=self.cpu_neurons,
         )
-        self.log(f"Brain ready. Input size: {self.brain._input_size}")
+        self.log(f"Brain ready.")
 
         # Initialize JMEM index
         jmem_file = self.jmem_path / "index.jmem"
@@ -717,13 +715,12 @@ class TrainingWorker(QThread):
 
         # Initialize brain
         device = 'cuda' if self.use_gpu else 'cpu'
-        self.log(f"Initializing brain ({device.upper()} mode)...")
+        self.log(f"Initializing brain ({device.upper()})...")
         self.brain = BrainAPI.create(
-            mode='text',
             device=device,
             cpu_neurons=self.cpu_neurons,
         )
-        self.log(f"Brain ready. Input size: {self.brain._input_size}")
+        self.log(f"Brain ready.")
 
         # Initialize JMEM index
         jmem_file = self.jmem_path / "index.jmem"
