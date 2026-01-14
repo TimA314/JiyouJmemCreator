@@ -34,9 +34,11 @@ import torch
 # Dynamic Brain Module Loading
 # =============================================================================
 
+# Import jcur locally (bundled with JMEM Creator)
+from jcur import CurriculumPack
+
 # Global placeholders - loaded dynamically when brain directory is selected
 BrainAPI = None
-CurriculumPack = None
 BookLoader = None
 _brain_dir: Optional[Path] = None
 
@@ -54,7 +56,7 @@ def load_brain_modules(brain_dir: Path) -> bool:
     Returns:
         True if successful, False otherwise
     """
-    global BrainAPI, CurriculumPack, BookLoader, _brain_dir
+    global BrainAPI, BookLoader, _brain_dir
 
     # Validate the directory contains expected files
     if not (brain_dir / "api.py").exists():
@@ -71,9 +73,6 @@ def load_brain_modules(brain_dir: Path) -> bool:
 
         api_module = __import__(f"{module_name}.api", fromlist=['BrainAPI'])
         BrainAPI = api_module.BrainAPI
-
-        jcur_module = __import__(f"{module_name}.jcur", fromlist=['CurriculumPack'])
-        CurriculumPack = jcur_module.CurriculumPack
 
         # Try to import BookLoader (optional, for PDF training)
         try:
