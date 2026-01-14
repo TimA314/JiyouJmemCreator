@@ -13,3 +13,7 @@ __pycache__/
 # OS
 .DS_Store
 Thumbs.db
+
+# Curricula (user-specific, download separately)
+curricula/*
+!curricula/.gitkeep

@@ -97,17 +97,17 @@ def get_brain_dir() -> Optional[Path]:
 # JCUR Discovery
 # =============================================================================
 
-def find_jcur_packs(brain_dir: Optional[Path] = None) -> List[Dict]:
-    """Find all .jcur directories in curricula folder."""
+# App directory (where this script lives)
+APP_DIR = Path(__file__).parent
+CURRICULA_DIR = APP_DIR / "curricula"
+
+
+def find_jcur_packs() -> List[Dict]:
+    """Find all .jcur directories in the local curricula folder."""
     jcur_packs = []
-    if brain_dir is None:
-        brain_dir = _brain_dir
-    if brain_dir is None:
+    if not CURRICULA_DIR.exists():
         return jcur_packs
-    curricula_dir = brain_dir / "curricula"
-    if not curricula_dir.exists():
-        return jcur_packs
-    for path in curricula_dir.glob("*.jcur"):
+    for path in CURRICULA_DIR.glob("*.jcur"):
         if path.is_dir():
             manifest = path / "manifest.json"
             if manifest.exists():
@@ -1191,8 +1191,8 @@ class JmemCreatorWindow(QMainWindow):
             self._log(f"Failed to save settings: {e}")
 
     def _refresh_jcur_list(self):
-        """Refresh the JCUR dropdown."""
-        self.jcur_packs = find_jcur_packs(self.brain_dir)
+        """Refresh the JCUR dropdown from local curricula directory."""
+        self.jcur_packs = find_jcur_packs()
         self.jcur_combo.clear()
 
         for pack in self.jcur_packs:
@@ -1201,7 +1201,7 @@ class JmemCreatorWindow(QMainWindow):
                 pack
             )
 
-        self._log(f"Found {len(self.jcur_packs)} JCUR packs")
+        self._log(f"Found {len(self.jcur_packs)} JCUR packs in {CURRICULA_DIR}")
 
     def _on_jcur_changed(self, index: int):
         """Handle JCUR selection change."""
