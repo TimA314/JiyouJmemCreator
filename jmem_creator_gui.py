@@ -386,6 +386,8 @@ class TrainingWorker(QThread):
         try:
             self._run_training()
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.training_error.emit(str(e))
         finally:
             self._cleanup()
