@@ -172,29 +172,21 @@ def get_log_path(jmem_path: Path) -> Path:
     return jmem_path / "training_log.jsonl"
 
 
-# Log buffer for batched writes (reduces disk I/O overhead)
-_log_buffer: List[Dict] = []
-LOG_FLUSH_INTERVAL = 50  # Flush every N trials
-
+# MEMORY LEAK FIX: Write logs immediately instead of buffering
+# The previous buffer was accumulating and never properly clearing
 
 def log_trial(jmem_path: Path, trial_data: Dict):
-    """Buffer a trial result for batched writing."""
-    _log_buffer.append(trial_data)
-    if len(_log_buffer) >= LOG_FLUSH_INTERVAL:
-        flush_log_buffer(jmem_path)
-
-
-def flush_log_buffer(jmem_path: Path):
-    """Write buffered logs to disk."""
-    global _log_buffer
-    if not _log_buffer:
-        return
+    """Write trial result immediately to disk (no buffering to prevent memory leak)."""
     log_path = get_log_path(jmem_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with open(log_path, 'a') as f:
-        for entry in _log_buffer:
-            f.write(json.dumps(entry) + '\n')
-    _log_buffer = []
+        f.write(json.dumps(trial_data) + '\n')
+    # trial_data goes out of scope immediately after this
+
+
+def flush_log_buffer(jmem_path: Path):
+    """No-op - kept for compatibility but buffering is disabled."""
+    pass
 
 
 def save_progress(jmem_path: Path, lesson_idx: int, item_idx: int,
@@ -568,9 +560,15 @@ class TrainingWorker(QThread):
                         if correct or result.get('exact_recall', False):
                             mastered = True
 
-                        # Log progress during mastery attempts
-                        if mastery_attempt % self.mastery_log_interval == 0 and not mastered:
-                            self.log(f"  Mastery attempt {mastery_attempt}: '{target_text[:20]}...' -> '{result['generated'][:20]}' ({result['char_accuracy']:.0%})")
+                        # Log progress during mastery attempts (reduced frequency to prevent memory leak)
+                        # Only log every 100 attempts to minimize signal emissions
+                        if mastery_attempt % 100 == 0 and not mastered:
+                            self.log(f"  Mastery attempt {mastery_attempt}: acc={result['char_accuracy']:.0%}")
+
+                        # GC EVERY attempt to prevent memory accumulation during long mastery loops
+                        gc.collect(0)
+                        if torch.cuda.is_available() and mastery_attempt % 10 == 0:
+                            torch.cuda.empty_cache()
 
                         # Skip mastery loop if not required (single attempt mode)
                         if not self.mastery_required:
@@ -594,8 +592,8 @@ class TrainingWorker(QThread):
                         'item_idx': item_idx,
                         'item_counter': item_counter,
                         'item_type': item.type,
-                        'target': target_text,
-                        'generated': result['generated'],
+                        'target': target_text[:100],  # Truncate to prevent memory bloat
+                        'generated': result['generated'][:100],  # Truncate to prevent memory bloat
                         'correct': mastered,  # Final mastery status
                         'char_accuracy': result['char_accuracy'],
                         'char_correct': result['char_correct'],
@@ -624,8 +622,8 @@ class TrainingWorker(QThread):
                             'timestamp': datetime.now().isoformat(),
                             'lesson': lesson.title,
                             'item_idx': item_idx,
-                            'target': target_text,
-                            'last_generated': result['generated'],
+                            'target': target_text[:100],  # Truncate to prevent memory bloat
+                            'last_generated': result['generated'][:100],  # Truncate to prevent memory bloat
                             'char_accuracy': result['char_accuracy'],
                             'mastery_attempts': mastery_attempt,
                         }
@@ -847,8 +845,17 @@ class TrainingWorker(QThread):
         # Flush any remaining buffered logs before cleanup
         flush_log_buffer(self.jmem_path)
         if self.brain:
+            # Clear the singleton instance to release all brain memory
+            try:
+                from JiYouBrain.brain import JiyouBrain
+                JiyouBrain.clear_instance()
+            except Exception as e:
+                self.log(f"Warning: Could not clear brain singleton: {e}")
             self.brain = None
         gc.collect()
+        # Free GPU memory
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
 
 # =============================================================================
@@ -1549,6 +1556,17 @@ class JmemCreatorWindow(QMainWindow):
         self._stop_elapsed_timer()
         self._log("Training finished.")
 
+        # Disconnect worker signals to prevent memory leak
+        if self.worker:
+            try:
+                self.worker.log_message.disconnect(self._log)
+                self.worker.progress_update.disconnect(self._on_progress_update)
+                self.worker.stats_update.disconnect(self._on_stats_update)
+                self.worker.training_finished.disconnect(self._on_training_finished)
+                self.worker.training_error.disconnect(self._on_training_error)
+            except TypeError:
+                pass  # Already disconnected
+
         # Create/update manifest.json for the JMEM pack
         jmem_path = Path(self.jmem_path_edit.text())
         if jmem_path.exists():
@@ -1563,11 +1581,52 @@ class JmemCreatorWindow(QMainWindow):
 
         self._update_button_states()
 
+        # Clean up worker and brain to prevent memory leak
+        try:
+            from JiYouBrain.brain import JiyouBrain
+            JiyouBrain.clear_instance()
+        except Exception:
+            pass
+
+        if self.worker:
+            self.worker.deleteLater()
+            self.worker = None
+
+        import gc
+        gc.collect()
+
     def _on_training_error(self, error: str):
         """Handle training error."""
         self._stop_elapsed_timer()
         self._log(f"ERROR: {error}")
         QMessageBox.critical(self, "Training Error", error)
+
+        # Disconnect worker signals to prevent memory leak
+        if self.worker:
+            try:
+                self.worker.log_message.disconnect(self._log)
+                self.worker.progress_update.disconnect(self._on_progress_update)
+                self.worker.stats_update.disconnect(self._on_stats_update)
+                self.worker.training_finished.disconnect(self._on_training_finished)
+                self.worker.training_error.disconnect(self._on_training_error)
+            except TypeError:
+                pass  # Already disconnected
+
+        self._update_button_states()
+
+        # Clean up worker and brain to prevent memory leak
+        try:
+            from JiYouBrain.brain import JiyouBrain
+            JiyouBrain.clear_instance()
+        except Exception:
+            pass
+
+        if self.worker:
+            self.worker.deleteLater()
+            self.worker = None
+
+        import gc
+        gc.collect()
 
     def _update_button_states(self):
         """Update button enabled states based on worker status and brain availability."""
@@ -1622,6 +1681,18 @@ class JmemCreatorWindow(QMainWindow):
 
             self.worker.stop()
             self.worker.wait(5000)  # Wait up to 5 seconds
+
+        # Clean up brain singleton to release memory
+        try:
+            from JiYouBrain.brain import JiyouBrain
+            JiyouBrain.clear_instance()
+        except Exception:
+            pass
+
+        # Force garbage collection
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         event.accept()
 
