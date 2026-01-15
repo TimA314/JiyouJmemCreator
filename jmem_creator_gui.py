@@ -365,7 +365,7 @@ class TrainingWorker(QThread):
         self.mastery_max_attempts = 500  # Max attempts before flagging as problematic and skipping
         self.mastery_log_interval = 10  # Log progress every N mastery attempts
         self.jmem_stats_interval = 10  # Log JMEM stats every N items
-        self.jmem_save_interval = 50  # Save JMEM to disk every N items (for crash recovery)
+        self.jmem_save_interval = 10  # Save JMEM to disk every N items (for crash recovery)
 
         # Book training settings
         self.chunk_size = 128  # Characters per chunk
@@ -669,7 +669,8 @@ class TrainingWorker(QThread):
                     if item_counter % self.jmem_stats_interval == 0 and self.brain._jmem_index:
                         jmem_stats = self.brain.get_jmem_index_stats()
                         if jmem_stats:
-                            self.log(f"  📚 JMEM: {jmem_stats['total_memories']} memories")
+                            content_emb_count = jmem_stats.get('content_embedding_count', 0)
+                            self.log(f"  📚 JMEM: {jmem_stats['total_memories']} memories, {content_emb_count} hub states")
 
                     # Periodic JMEM save (crash recovery)
                     if item_counter % self.jmem_save_interval == 0 and self.brain._jmem_index:
@@ -972,12 +973,29 @@ class PoolTrainingWorker(QThread):
 
             self.log_message.emit(f"[Pool] Training complete: {stats['success']}/{stats['total']} items ({stats.get('accuracy', 0):.1%})")
 
+            # Merge shards to index.jmem
+            shard_file = shard_dir / 'shard_0.jmem'
+            output_jmem = self.jmem_path / 'index.jmem'
+            if shard_file.exists():
+                import shutil
+                shutil.copy2(shard_file, output_jmem)
+                self.log_message.emit(f"[Pool] Saved to {output_jmem.name}")
+
         except Exception as e:
             import traceback
             self.log_message.emit(f"[Pool] Error: {e}")
             self.log_message.emit(traceback.format_exc())
             self.training_error.emit(str(e))
         finally:
+            # Also copy shard on early stop/error
+            try:
+                shard_file = self.jmem_path.parent / 'shards' / 'shard_0.jmem'
+                output_jmem = self.jmem_path / 'index.jmem'
+                if shard_file.exists():
+                    import shutil
+                    shutil.copy2(shard_file, output_jmem)
+            except:
+                pass
             self._cleanup()
             self.training_finished.emit()
 
