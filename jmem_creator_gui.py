@@ -909,6 +909,18 @@ class PoolTrainingWorker(QThread):
 
             self.log_message.emit(f"[Pool] Starting {len(self.worker_configs)} workers...")
 
+            # Determine base JMEM - use existing output JMEM if it exists, or first from base_jmems
+            output_jmem = self.jmem_path / 'index.jmem'
+            if output_jmem.exists():
+                base_jmem = str(output_jmem)  # Use the actual index.jmem file path
+                self.log_message.emit(f"[Pool] Continuing from existing JMEM ({output_jmem})")
+            elif self.base_jmems:
+                base_jmem = self.base_jmems[0]
+                self.log_message.emit(f"[Pool] Using base JMEM: {Path(base_jmem).name}")
+            else:
+                base_jmem = None
+                self.log_message.emit("[Pool] Starting fresh (no base JMEM)")
+
             # Progress callback
             def on_progress(progress: float, stats: dict):
                 if self._stop_flag:
@@ -931,8 +943,8 @@ class PoolTrainingWorker(QThread):
             # Run training
             stats = self._pool.train_curriculum(
                 jcur_path=str(self.jcur_path),
-                output_path=str(self.jmem_path / 'index.jmem'),
-                base_jmem=self.base_jmems[0] if self.base_jmems else None,
+                output_path=str(output_jmem),
+                base_jmem=base_jmem,
                 on_progress=on_progress,
                 progress_interval=0.5,
             )
@@ -1265,6 +1277,11 @@ class JmemCreatorWindow(QMainWindow):
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(self._on_stop)
         controls_layout.addWidget(self.stop_btn)
+
+        self.restart_btn = QPushButton("Restart")
+        self.restart_btn.clicked.connect(self._on_restart)
+        self.restart_btn.setToolTip("Stop current training and restart from beginning")
+        controls_layout.addWidget(self.restart_btn)
 
         controls_layout.addStretch()
 
@@ -1747,6 +1764,42 @@ class JmemCreatorWindow(QMainWindow):
                 )
                 self._log(f"Saved manifest: {manifest.get('total_memories', 0)} memories")
 
+    def _on_restart(self):
+        """Stop current training and restart from beginning."""
+        # Confirm with user
+        if self.worker and self.worker.isRunning():
+            reply = QMessageBox.question(
+                self, "Restart Training",
+                "This will stop current training and start from the beginning.\n"
+                "Any unsaved progress will be lost.\n\n"
+                "Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+            # Stop current training
+            self._log("Restarting training...")
+            self._stop_elapsed_timer()
+            self.worker.stop()
+            self.worker.wait(5000)  # Wait up to 5 seconds for stop
+            self.worker = None
+
+        # Reset progress
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("0%")
+        self.accuracy_label.setText("Accuracy: 0% (0/0)")
+        self.elapsed_label.setText("Time: 00:00:00")
+        self.lesson_label.setText("Lesson: -")
+
+        # Reset worker table status
+        for i in range(self.worker_table.rowCount()):
+            self.worker_table.setItem(i, 2, QTableWidgetItem("Ready"))
+
+        # Start fresh
+        self._on_start()
+
     def _on_progress_update(self, current: int, total: int, lesson_name: str):
         """Handle progress update."""
         self.progress_bar.setMaximum(total)
@@ -1881,6 +1934,7 @@ class JmemCreatorWindow(QMainWindow):
         self.pause_btn.setEnabled(running and not paused and supports_pause)
         self.resume_btn.setEnabled(paused and supports_pause)
         self.stop_btn.setEnabled(running)
+        self.restart_btn.setEnabled(running or (brain_loaded and has_workers))
 
         # Source selection - requires brain
         self.source_type_combo.setEnabled(not running and brain_loaded)
