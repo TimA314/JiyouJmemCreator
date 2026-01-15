@@ -129,7 +129,7 @@ def find_jcur_packs() -> List[Dict]:
 
 
 def find_jmem_packs(brain_dir: Optional[Path] = None) -> List[Dict]:
-    """Find all JMEM packs in jiyou_packs folder (for base JMEMs selection)."""
+    """Find all JMEM packs in jmem_packs folder (for base JMEMs selection)."""
     jmem_packs = []
     if brain_dir is None:
         brain_dir = _brain_dir
@@ -1161,7 +1161,7 @@ class JmemCreatorWindow(QMainWindow):
         base_btns_layout.addStretch()
 
         self.auto_add_btn = QPushButton("Auto-add Available")
-        self.auto_add_btn.setToolTip("Add all existing JMEMs from jiyou_packs/")
+        self.auto_add_btn.setToolTip("Add all existing JMEMs from jmem_packs/")
         self.auto_add_btn.clicked.connect(self._on_auto_add_base_jmems)
         base_btns_layout.addWidget(self.auto_add_btn)
 
@@ -1437,7 +1437,7 @@ class JmemCreatorWindow(QMainWindow):
             return
 
         pack = self.jcur_packs[index]
-        jmem_path = self.brain_dir / "jiyou_packs" / pack['domain']
+        jmem_path = self.brain_dir / "jmem_packs" / pack['domain']
         self.jmem_path_edit.setText(str(jmem_path))
 
         # Check for existing progress
@@ -1476,7 +1476,7 @@ class JmemCreatorWindow(QMainWindow):
         if path.exists() and path.is_file():
             # Auto-generate JMEM output path from book name
             book_name = path.stem.lower().replace(' ', '_')
-            jmem_path = self.brain_dir / "jiyou_packs" / book_name
+            jmem_path = self.brain_dir / "jmem_packs" / book_name
             self.jmem_path_edit.setText(str(jmem_path))
 
             # Check for existing progress
@@ -1487,7 +1487,7 @@ class JmemCreatorWindow(QMainWindow):
 
     def _on_browse_jmem(self):
         """Browse for JMEM output directory."""
-        start_dir = str(self.brain_dir / "jiyou_packs") if self.brain_dir else str(Path.home())
+        start_dir = str(self.brain_dir / "jmem_packs") if self.brain_dir else str(Path.home())
         path = QFileDialog.getExistingDirectory(
             self, "Select JMEM Output Directory",
             start_dir
@@ -1673,7 +1673,7 @@ class JmemCreatorWindow(QMainWindow):
 
         if not available:
             # Fall back to directory browser
-            start_dir = str(self.brain_dir / "jiyou_packs") if self.brain_dir else str(Path.home())
+            start_dir = str(self.brain_dir / "jmem_packs") if self.brain_dir else str(Path.home())
             path = QFileDialog.getExistingDirectory(
                 self, "Select Base JMEM Directory",
                 start_dir
