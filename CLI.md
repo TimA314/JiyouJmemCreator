@@ -2,14 +2,31 @@
 
 Command-line interface for training JMEM packs from JCUR curricula.
 
+## Installation
+
+To run `jmem` from anywhere, create the launcher script:
+
+```bash
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/jmem << 'EOF'
+#!/bin/bash
+JMEM_DIR="/home/zx/Desktop/JiYou/JmemCreator"
+VENV="/home/zx/Desktop/JiYou/.venv/bin/python"
+cd "$JMEM_DIR" && exec "$VENV" jmem_creator_cli.py "$@"
+EOF
+chmod +x ~/.local/bin/jmem
+```
+
+Make sure `~/.local/bin` is in your PATH (it usually is by default).
+
 ## Quick Start
 
 ```bash
-# Activate virtual environment
-source ../.venv/bin/activate
+# Run from anywhere
+jmem
 
-# Run interactive mode
-python jmem_creator_cli.py
+# Or run directly from this directory
+jmem
 ```
 
 ## Commands
@@ -19,7 +36,7 @@ python jmem_creator_cli.py
 Run without arguments for menu-driven configuration:
 
 ```bash
-python jmem_creator_cli.py
+jmem
 ```
 
 This opens an interactive menu where you can:
@@ -32,7 +49,7 @@ This opens an interactive menu where you can:
 ### List Available Curricula
 
 ```bash
-python jmem_creator_cli.py list
+jmem list
 ```
 
 Shows all JCUR packs in `curricula/` and trained JMEM packs.
@@ -41,10 +58,10 @@ Shows all JCUR packs in `curricula/` and trained JMEM packs.
 
 ```bash
 # Show current config
-python jmem_creator_cli.py config
+jmem config
 
 # Set brain directory
-python jmem_creator_cli.py config --set-brain /path/to/JiYouBrain
+jmem config --set-brain /path/to/JiYouBrain
 ```
 
 ### Direct Training
@@ -52,7 +69,7 @@ python jmem_creator_cli.py config --set-brain /path/to/JiYouBrain
 Train without interactive menus:
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   --jcur curricula/english_core.jcur \
   --output ~/JiYouBrain/jmem_packs/english_core \
   --worker cuda:400000
@@ -86,7 +103,7 @@ Format: `device:neurons[:big]`
 ### Single GPU Training
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   -j curricula/tools.jcur \
   -o ~/JiYouBrain/jmem_packs/tools \
   -w cuda:400000
@@ -95,7 +112,7 @@ python jmem_creator_cli.py train \
 ### Multi-Worker Training
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   -j curricula/english_core.jcur \
   -o ~/JiYouBrain/jmem_packs/english_core \
   -w cuda:400000 \
@@ -106,7 +123,7 @@ python jmem_creator_cli.py train \
 ### With Base JMEM Context
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   -j curricula/tools.jcur \
   -o ~/JiYouBrain/jmem_packs/tools \
   -w cuda:400000 \
@@ -118,7 +135,7 @@ python jmem_creator_cli.py train \
 Re-train all items (useful when brain has improved):
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   -j curricula/tools.jcur \
   -o ~/JiYouBrain/jmem_packs/tools \
   -w cuda:400000 \
@@ -128,7 +145,7 @@ python jmem_creator_cli.py train \
 ### Non-Interactive (for scripts/logs)
 
 ```bash
-python jmem_creator_cli.py train \
+jmem train \
   -j curricula/english_core.jcur \
   -o ~/JiYouBrain/jmem_packs/english_core \
   -w cuda:400000 \
