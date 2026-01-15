@@ -1194,8 +1194,8 @@ class JmemCreatorWindow(QMainWindow):
 
         # Worker table
         self.worker_table = QTableWidget()
-        self.worker_table.setColumnCount(4)
-        self.worker_table.setHorizontalHeaderLabels(["Device", "Neurons", "Type", "Status"])
+        self.worker_table.setColumnCount(5)
+        self.worker_table.setHorizontalHeaderLabels(["Device", "Neurons", "Type", "Status", "Current Item"])
         self.worker_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.worker_table.setSelectionMode(QTableWidget.SingleSelection)
         self.worker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -1614,6 +1614,7 @@ class JmemCreatorWindow(QMainWindow):
             worker_type = "Big Brain" if is_big_brain else "Normal"
             self.worker_table.setItem(i, 2, QTableWidgetItem(worker_type))
             self.worker_table.setItem(i, 3, QTableWidgetItem("Ready"))
+            self.worker_table.setItem(i, 4, QTableWidgetItem(""))  # Current item (empty when not running)
         self._update_button_states()
 
     def _on_worker_stats(self, per_worker: list):
@@ -1625,11 +1626,27 @@ class JmemCreatorWindow(QMainWindow):
                 is_big = stats.get('is_big_brain', False)
                 prefix = "BB: " if is_big else ""
                 status = f"{prefix}{total} items, {accuracy:.0f}%"
+
+                # Update Status column (3)
                 item = self.worker_table.item(i, 3)
                 if item:
                     item.setText(status)
                 else:
                     self.worker_table.setItem(i, 3, QTableWidgetItem(status))
+
+                # Update Current Item column (4)
+                current_target = stats.get('current_target', '')
+                if current_target:
+                    # Truncate long targets for display
+                    display_text = current_target[:40] + "..." if len(current_target) > 40 else current_target
+                else:
+                    display_text = "(idle)"
+
+                item = self.worker_table.item(i, 4)
+                if item:
+                    item.setText(display_text)
+                else:
+                    self.worker_table.setItem(i, 4, QTableWidgetItem(display_text))
 
     def _on_start_fresh(self):
         """Start fresh - clear JMEM and progress."""
@@ -1810,9 +1827,10 @@ class JmemCreatorWindow(QMainWindow):
         self.worker.training_finished.connect(self._on_training_finished)
         self.worker.training_error.connect(self._on_training_error)
 
-        # Update worker status to "Initializing" (column 3 is Status)
+        # Update worker status to "Initializing" (column 3 is Status, column 4 is Current Item)
         for i in range(self.worker_table.rowCount()):
             self.worker_table.setItem(i, 3, QTableWidgetItem("Initializing..."))
+            self.worker_table.setItem(i, 4, QTableWidgetItem(""))
 
         self.worker.start()
         self._start_elapsed_timer()
