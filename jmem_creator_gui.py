@@ -26,7 +26,10 @@ from PyQt5.QtWidgets import (
     QLabel, QComboBox, QPushButton, QProgressBar, QPlainTextEdit,
     QLineEdit, QFileDialog, QMessageBox, QGroupBox, QCheckBox,
     QStackedWidget, QFrame, QListWidget, QAbstractItemView, QSpinBox,
+    QTableWidget, QTableWidgetItem, QDialog, QDialogButtonBox,
+    QFormLayout, QHeaderView,
 )
+from typing import Tuple
 
 import torch
 
@@ -859,6 +862,152 @@ class TrainingWorker(QThread):
 
 
 # =============================================================================
+# Pool Training Worker (Multi-Brain Parallel Training)
+# =============================================================================
+
+class PoolTrainingWorker(QThread):
+    """Training worker that uses BrainPool for parallel training."""
+
+    log_message = pyqtSignal(str)
+    progress_update = pyqtSignal(int, int, str)  # current, total, status
+    stats_update = pyqtSignal(float, int, int)   # accuracy, correct, total
+    worker_stats = pyqtSignal(list)  # Per-worker stats list
+    training_finished = pyqtSignal()
+    training_error = pyqtSignal(str)
+
+    def __init__(
+        self,
+        worker_configs: List[Tuple[str, int]],  # (device, neurons) pairs
+        jcur_path: Path,
+        jmem_path: Path,
+        base_jmems: List[str],
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.worker_configs = worker_configs
+        self.jcur_path = jcur_path
+        self.jmem_path = jmem_path
+        self.base_jmems = base_jmems
+
+        self._pool = None
+        self._stop_flag = False
+
+    def run(self):
+        """Main training loop using BrainPool."""
+        try:
+            from JiYouBrain.pool import BrainPool
+
+            # Create pool with output in jmem directory
+            shard_dir = self.jmem_path.parent / 'shards'
+            self._pool = BrainPool(output_dir=str(shard_dir))
+
+            # Add workers
+            for device, neurons in self.worker_configs:
+                device_str = 'cuda' if device == 'GPU' else 'cpu'
+                self._pool.add_worker(device=device_str, neurons=neurons)
+                self.log_message.emit(f"[Pool] Added worker: {device}, {neurons:,} neurons")
+
+            self.log_message.emit(f"[Pool] Starting {len(self.worker_configs)} workers...")
+
+            # Progress callback
+            def on_progress(progress: float, stats: dict):
+                if self._stop_flag:
+                    return
+
+                total = stats.get('queue', {}).get('total', 0)
+                completed = stats.get('queue', {}).get('completed', 0)
+                success = stats.get('success', 0)
+                failed = stats.get('failed', 0)
+
+                # Calculate accuracy
+                total_items = success + failed
+                accuracy = success / total_items if total_items > 0 else 0.0
+
+                # Emit progress
+                self.progress_update.emit(completed, total, f"{progress:.0%}")
+                self.stats_update.emit(accuracy, success, total_items)
+                self.worker_stats.emit(stats.get('per_worker', []))
+
+            # Run training
+            stats = self._pool.train_curriculum(
+                jcur_path=str(self.jcur_path),
+                output_path=str(self.jmem_path / 'index.jmem'),
+                base_jmem=self.base_jmems[0] if self.base_jmems else None,
+                on_progress=on_progress,
+                progress_interval=0.5,
+            )
+
+            self.log_message.emit(f"[Pool] Training complete: {stats['success']}/{stats['total']} items ({stats.get('accuracy', 0):.1%})")
+
+        except Exception as e:
+            import traceback
+            self.log_message.emit(f"[Pool] Error: {e}")
+            self.log_message.emit(traceback.format_exc())
+            self.training_error.emit(str(e))
+        finally:
+            self._cleanup()
+            self.training_finished.emit()
+
+    def stop(self):
+        """Request graceful stop."""
+        self._stop_flag = True
+        if self._pool:
+            self._pool.stop_all()
+
+    def _cleanup(self):
+        """Clean up resources."""
+        self._pool = None
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
+
+# =============================================================================
+# Add Worker Dialog
+# =============================================================================
+
+class AddWorkerDialog(QDialog):
+    """Dialog for adding a new worker configuration."""
+
+    def __init__(self, parent=None, gpu_available: bool = True):
+        super().__init__(parent)
+        self.setWindowTitle("Add Worker")
+        self.setMinimumWidth(300)
+
+        layout = QVBoxLayout(self)
+
+        # Form
+        form = QFormLayout()
+
+        self.device_combo = QComboBox()
+        self.device_combo.addItems(["GPU", "CPU"])
+        if not gpu_available:
+            self.device_combo.setCurrentIndex(1)  # Default to CPU
+            self.device_combo.model().item(0).setEnabled(False)
+        form.addRow("Device:", self.device_combo)
+
+        self.neurons_spin = QSpinBox()
+        self.neurons_spin.setRange(50000, 2000000)
+        self.neurons_spin.setSingleStep(50000)
+        self.neurons_spin.setValue(200000)
+        form.addRow("Neurons:", self.neurons_spin)
+
+        layout.addLayout(form)
+
+        # Buttons
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_config(self) -> Tuple[str, int]:
+        """Get the worker configuration."""
+        return (self.device_combo.currentText(), self.neurons_spin.value())
+
+
+# =============================================================================
 # Main Window
 # =============================================================================
 
@@ -871,11 +1020,12 @@ class JmemCreatorWindow(QMainWindow):
         self.setMinimumSize(700, 650)
 
         # State
-        self.worker: Optional[TrainingWorker] = None
+        self.worker = None  # TrainingWorker or PoolTrainingWorker
         self.brain_dir: Optional[Path] = None  # Path to brain directory
         self.jcur_packs = []
         self.available_jmems = []  # Available JMEMs for base selection
         self.selected_base_jmems: List[str] = []  # Paths of selected base JMEMs
+        self.worker_configs: List[Tuple[str, int]] = []  # (device, neurons) pairs
 
         self._setup_ui()
         self._load_settings()  # Load saved settings including brain_dir
@@ -1015,42 +1165,61 @@ class JmemCreatorWindow(QMainWindow):
 
         layout.addWidget(jmem_group)
 
-        # === Settings ===
-        settings_group = QGroupBox("Settings")
-        settings_layout = QHBoxLayout(settings_group)
+        # === Worker Configuration ===
+        worker_group = QGroupBox("Worker Configuration")
+        worker_layout = QVBoxLayout(worker_group)
 
-        # GPU checkbox
-        self.gpu_checkbox = QCheckBox("Use GPU")
+        # Worker table
+        self.worker_table = QTableWidget()
+        self.worker_table.setColumnCount(3)
+        self.worker_table.setHorizontalHeaderLabels(["Device", "Neurons", "Status"])
+        self.worker_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.worker_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.worker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.worker_table.setMaximumHeight(150)
+        worker_layout.addWidget(self.worker_table)
+
+        # Control buttons
+        btn_layout = QHBoxLayout()
+        self.add_worker_btn = QPushButton("Add Worker")
+        self.add_worker_btn.clicked.connect(self._on_add_worker)
+        btn_layout.addWidget(self.add_worker_btn)
+
+        self.remove_worker_btn = QPushButton("Remove")
+        self.remove_worker_btn.clicked.connect(self._on_remove_worker)
+        btn_layout.addWidget(self.remove_worker_btn)
+
+        self.clear_workers_btn = QPushButton("Clear All")
+        self.clear_workers_btn.clicked.connect(self._on_clear_workers)
+        btn_layout.addWidget(self.clear_workers_btn)
+
+        btn_layout.addStretch()
+        worker_layout.addLayout(btn_layout)
+
+        # Quick presets
+        preset_layout = QHBoxLayout()
+        preset_layout.addWidget(QLabel("Quick Add:"))
+
         gpu_available = torch.cuda.is_available()
-        self.gpu_checkbox.setChecked(gpu_available)  # Default to GPU if available
-        self.gpu_checkbox.setEnabled(gpu_available)
-        if not gpu_available:
-            self.gpu_checkbox.setText("Use GPU (not available)")
-        settings_layout.addWidget(self.gpu_checkbox)
 
-        settings_layout.addSpacing(20)
+        self.preset_2gpu_btn = QPushButton("2× GPU 200K")
+        self.preset_2gpu_btn.clicked.connect(lambda: self._add_worker_preset('GPU', 200000, 2))
+        self.preset_2gpu_btn.setEnabled(gpu_available)
+        preset_layout.addWidget(self.preset_2gpu_btn)
 
-        # Brain mode selector
-        settings_layout.addWidget(QLabel("Brain Mode:"))
-        self.brain_mode_combo = QComboBox()
-        self.brain_mode_combo.addItems(["Text (200K)", "Standard (400K)", "Research (1.5M)", "Custom"])
-        self.brain_mode_combo.setCurrentIndex(1)  # Default to Standard for better JMEM quality
-        self.brain_mode_combo.currentIndexChanged.connect(self._on_brain_mode_changed)
-        settings_layout.addWidget(self.brain_mode_combo)
+        self.preset_4cpu_btn = QPushButton("4× CPU 200K")
+        self.preset_4cpu_btn.clicked.connect(lambda: self._add_worker_preset('CPU', 200000, 4))
+        preset_layout.addWidget(self.preset_4cpu_btn)
 
-        settings_layout.addSpacing(10)
+        self.preset_mixed_btn = QPushButton("2× GPU + 2× CPU")
+        self.preset_mixed_btn.clicked.connect(self._add_mixed_preset)
+        self.preset_mixed_btn.setEnabled(gpu_available)
+        preset_layout.addWidget(self.preset_mixed_btn)
 
-        # CPU neuron count spinbox (always editable, presets just set initial value)
-        settings_layout.addWidget(QLabel("CPU Neurons:"))
-        self.cpu_neurons_spin = QSpinBox()
-        self.cpu_neurons_spin.setRange(100000, 2000000)
-        self.cpu_neurons_spin.setSingleStep(50000)  # 50K increments
-        self.cpu_neurons_spin.setValue(400000)  # Default to Standard mode value
-        settings_layout.addWidget(self.cpu_neurons_spin)
+        preset_layout.addStretch()
+        worker_layout.addLayout(preset_layout)
 
-        settings_layout.addStretch()
-
-        layout.addWidget(settings_group)
+        layout.addWidget(worker_group)
 
         # === Progress ===
         progress_group = QGroupBox("Progress")
@@ -1164,20 +1333,16 @@ class JmemCreatorWindow(QMainWindow):
                             self._refresh_jcur_list()
                             self._refresh_available_jmems()
 
-                # Restore GPU setting
-                if 'use_gpu' in settings:
+                # Restore worker configurations
+                if 'worker_configs' in settings:
                     gpu_available = torch.cuda.is_available()
-                    self.gpu_checkbox.setChecked(settings['use_gpu'] and gpu_available)
-
-                # Restore CPU neurons
-                if 'cpu_neurons' in settings:
-                    self.cpu_neurons_spin.setValue(settings['cpu_neurons'])
-                    # Update brain mode combo to Custom if not matching presets
-                    presets = {200000: 0, 400000: 1, 1500000: 2}
-                    if settings['cpu_neurons'] in presets:
-                        self.brain_mode_combo.setCurrentIndex(presets[settings['cpu_neurons']])
-                    else:
-                        self.brain_mode_combo.setCurrentIndex(3)  # Custom
+                    for device, neurons in settings['worker_configs']:
+                        # Skip GPU workers if GPU not available
+                        if device == 'GPU' and not gpu_available:
+                            continue
+                        self.worker_configs.append((device, neurons))
+                    self._update_worker_table()
+                    self._log(f"Restored {len(self.worker_configs)} worker configurations")
 
             except Exception as e:
                 self._log(f"Failed to load settings: {e}")
@@ -1187,8 +1352,7 @@ class JmemCreatorWindow(QMainWindow):
         try:
             SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
             settings = {
-                'use_gpu': self.gpu_checkbox.isChecked(),
-                'cpu_neurons': self.cpu_neurons_spin.value(),
+                'worker_configs': self.worker_configs,
             }
             if self.brain_dir:
                 settings['brain_dir'] = str(self.brain_dir)
@@ -1296,16 +1460,70 @@ class JmemCreatorWindow(QMainWindow):
             except Exception as e:
                 self._log(f"Error clearing: {e}")
 
-    def _on_brain_mode_changed(self, index: int):
-        """Handle brain mode selection - sets value but spinbox stays editable."""
-        mode_neurons = {
-            0: 200000,    # Text (200K)
-            1: 400000,    # Standard (400K)
-            2: 1500000,   # Research (1.5M)
-        }
-        if index < 3:  # Preset mode - set value
-            self.cpu_neurons_spin.setValue(mode_neurons[index])
-        # Custom mode (3) - leave current value, user adjusts manually
+    # === Worker Configuration Methods ===
+
+    def _on_add_worker(self):
+        """Open dialog to add a new worker."""
+        gpu_available = torch.cuda.is_available()
+        dialog = AddWorkerDialog(self, gpu_available=gpu_available)
+        if dialog.exec_() == QDialog.Accepted:
+            device, neurons = dialog.get_config()
+            self._add_worker_to_table(device, neurons)
+
+    def _add_worker_to_table(self, device: str, neurons: int):
+        """Add a worker configuration to the table."""
+        self.worker_configs.append((device, neurons))
+        self._update_worker_table()
+
+    def _on_remove_worker(self):
+        """Remove selected worker from table."""
+        row = self.worker_table.currentRow()
+        if row >= 0 and row < len(self.worker_configs):
+            self.worker_configs.pop(row)
+            self._update_worker_table()
+
+    def _on_clear_workers(self):
+        """Clear all workers from table."""
+        self.worker_configs.clear()
+        self._update_worker_table()
+
+    def _add_worker_preset(self, device: str, neurons: int, count: int):
+        """Add multiple workers with the same configuration."""
+        for _ in range(count):
+            self.worker_configs.append((device, neurons))
+        self._update_worker_table()
+
+    def _add_mixed_preset(self):
+        """Add 2 GPU + 2 CPU workers."""
+        self.worker_configs.extend([
+            ('GPU', 200000),
+            ('GPU', 200000),
+            ('CPU', 200000),
+            ('CPU', 200000),
+        ])
+        self._update_worker_table()
+
+    def _update_worker_table(self):
+        """Update the worker table display."""
+        self.worker_table.setRowCount(len(self.worker_configs))
+        for i, (device, neurons) in enumerate(self.worker_configs):
+            self.worker_table.setItem(i, 0, QTableWidgetItem(device))
+            self.worker_table.setItem(i, 1, QTableWidgetItem(f"{neurons:,}"))
+            self.worker_table.setItem(i, 2, QTableWidgetItem("Ready"))
+        self._update_button_states()
+
+    def _on_worker_stats(self, per_worker: list):
+        """Update per-worker status in table during training."""
+        for i, stats in enumerate(per_worker):
+            if i < self.worker_table.rowCount():
+                accuracy = stats.get('accuracy', 0) * 100
+                total = stats.get('total', 0)
+                status = f"{total} items, {accuracy:.0f}%"
+                item = self.worker_table.item(i, 2)
+                if item:
+                    item.setText(status)
+                else:
+                    self.worker_table.setItem(i, 2, QTableWidgetItem(status))
 
     def _on_start_fresh(self):
         """Start fresh - clear JMEM and progress."""
@@ -1415,7 +1633,7 @@ class JmemCreatorWindow(QMainWindow):
             self._log("No new JMEMs to add")
 
     def _on_start(self):
-        """Start training."""
+        """Start training using BrainPool for parallel processing."""
         if self.worker and self.worker.isRunning():
             return
 
@@ -1424,6 +1642,15 @@ class JmemCreatorWindow(QMainWindow):
             QMessageBox.warning(
                 self, "Brain Not Loaded",
                 "Please select a brain directory first."
+            )
+            return
+
+        # Check workers are configured
+        if not self.worker_configs:
+            QMessageBox.warning(
+                self, "No Workers",
+                "Add at least one worker before starting training.\n\n"
+                "Use the 'Add Worker' button or quick presets."
             )
             return
 
@@ -1447,44 +1674,38 @@ class JmemCreatorWindow(QMainWindow):
             pack = self.jcur_packs[index]
             jcur_path = pack['path']
         else:
-            pdf_path = self.pdf_path_edit.text()
-            if not pdf_path or not Path(pdf_path).exists():
-                self._log("No valid book file selected")
-                return
-
-        # Check for resume
-        progress = load_progress(jmem_path)
-        resume = False
-        if progress:
-            if source_type == "jcur":
-                msg = f"Found saved progress:\nLesson {progress['lesson_idx'] + 1}, Item {progress['item_idx']}\n\nResume from checkpoint?"
-            else:
-                msg = f"Found saved progress:\nChunk {progress['item_idx']}\n\nResume from checkpoint?"
-            reply = QMessageBox.question(
-                self, "Resume Training", msg,
-                QMessageBox.Yes | QMessageBox.No
+            # Book training not supported with BrainPool yet
+            QMessageBox.warning(
+                self, "Not Supported",
+                "Book training is not yet supported with parallel workers.\n\n"
+                "Please use JCUR curriculum for parallel training."
             )
-            resume = (reply == QMessageBox.Yes)
+            return
 
-        # Create and start worker
-        use_gpu = self.gpu_checkbox.isChecked()
-        cpu_neurons = self.cpu_neurons_spin.value()
-        self.worker = TrainingWorker(
-            jmem_path=jmem_path,
-            resume=resume,
-            use_gpu=use_gpu,
-            source_type=source_type,
+        # Log worker configuration
+        self._log(f"Starting parallel training with {len(self.worker_configs)} workers:")
+        for i, (device, neurons) in enumerate(self.worker_configs):
+            self._log(f"  Worker {i}: {device}, {neurons:,} neurons")
+
+        # Create and start pool worker
+        self.worker = PoolTrainingWorker(
+            worker_configs=self.worker_configs.copy(),
             jcur_path=jcur_path,
-            pdf_path=pdf_path,
+            jmem_path=jmem_path,
             base_jmems=self.selected_base_jmems.copy(),
-            cpu_neurons=cpu_neurons,
         )
-        self._log(f"Using {cpu_neurons:,} CPU neurons for training")
+
+        # Connect signals
         self.worker.log_message.connect(self._log)
         self.worker.progress_update.connect(self._on_progress_update)
         self.worker.stats_update.connect(self._on_stats_update)
+        self.worker.worker_stats.connect(self._on_worker_stats)
         self.worker.training_finished.connect(self._on_training_finished)
         self.worker.training_error.connect(self._on_training_error)
+
+        # Update worker status to "Initializing"
+        for i in range(self.worker_table.rowCount()):
+            self.worker_table.setItem(i, 2, QTableWidgetItem("Initializing..."))
 
         self.worker.start()
         self._start_elapsed_timer()
@@ -1492,16 +1713,22 @@ class JmemCreatorWindow(QMainWindow):
         self._log("Training started...")
 
     def _on_pause(self):
-        """Pause training."""
+        """Pause training (not supported with BrainPool)."""
         if self.worker and self.worker.isRunning():
-            self.worker.pause()
-            self._update_button_states()
+            if hasattr(self.worker, 'pause'):
+                self.worker.pause()
+                self._update_button_states()
+            else:
+                self._log("Pause not supported with parallel training")
 
     def _on_resume(self):
-        """Resume training."""
+        """Resume training (not supported with BrainPool)."""
         if self.worker and self.worker.isRunning():
-            self.worker.unpause()
-            self._update_button_states()
+            if hasattr(self.worker, 'unpause'):
+                self.worker.unpause()
+                self._update_button_states()
+            else:
+                self._log("Resume not supported with parallel training")
 
     def _on_stop(self):
         """Stop training."""
@@ -1564,8 +1791,19 @@ class JmemCreatorWindow(QMainWindow):
                 self.worker.stats_update.disconnect(self._on_stats_update)
                 self.worker.training_finished.disconnect(self._on_training_finished)
                 self.worker.training_error.disconnect(self._on_training_error)
+                # PoolTrainingWorker has worker_stats signal
+                if hasattr(self.worker, 'worker_stats'):
+                    self.worker.worker_stats.disconnect(self._on_worker_stats)
             except TypeError:
                 pass  # Already disconnected
+
+        # Reset worker status in table
+        for i in range(self.worker_table.rowCount()):
+            item = self.worker_table.item(i, 2)
+            if item:
+                status = item.text()
+                if "Initializing" in status or "items" in status:
+                    item.setText("Done")
 
         # Create/update manifest.json for the JMEM pack
         jmem_path = Path(self.jmem_path_edit.text())
@@ -1631,13 +1869,17 @@ class JmemCreatorWindow(QMainWindow):
     def _update_button_states(self):
         """Update button enabled states based on worker status and brain availability."""
         running = bool(self.worker and self.worker.isRunning())
-        paused = bool(running and self.worker.is_paused)
+        paused = bool(running and hasattr(self.worker, 'is_paused') and self.worker.is_paused)
         brain_loaded = self.brain_dir is not None
 
-        # Start requires brain to be loaded
-        self.start_btn.setEnabled(not running and brain_loaded)
-        self.pause_btn.setEnabled(running and not paused)
-        self.resume_btn.setEnabled(paused)
+        # Start requires brain to be loaded and at least one worker configured
+        has_workers = len(self.worker_configs) > 0
+        self.start_btn.setEnabled(not running and brain_loaded and has_workers)
+
+        # Pause/Resume - only supported with TrainingWorker, not PoolTrainingWorker
+        supports_pause = hasattr(self.worker, 'pause') if self.worker else False
+        self.pause_btn.setEnabled(running and not paused and supports_pause)
+        self.resume_btn.setEnabled(paused and supports_pause)
         self.stop_btn.setEnabled(running)
 
         # Source selection - requires brain
@@ -1658,9 +1900,14 @@ class JmemCreatorWindow(QMainWindow):
         self.start_fresh_btn.setEnabled(not running and brain_loaded)
         self.clear_jmem_btn.setEnabled(not running and brain_loaded)
 
-        # GPU checkbox: only enabled when not running AND GPU is available
-        gpu_available = torch.cuda.is_available()
-        self.gpu_checkbox.setEnabled(not running and gpu_available)
+        # Worker configuration - disable when running
+        self.add_worker_btn.setEnabled(not running)
+        self.remove_worker_btn.setEnabled(not running and has_workers)
+        self.clear_workers_btn.setEnabled(not running and has_workers)
+        self.preset_2gpu_btn.setEnabled(not running and torch.cuda.is_available())
+        self.preset_4cpu_btn.setEnabled(not running)
+        self.preset_mixed_btn.setEnabled(not running and torch.cuda.is_available())
+        self.worker_table.setEnabled(not running)
 
     def _log(self, msg: str):
         """Add message to log."""
