@@ -27,7 +27,7 @@ from PyQt5.QtWidgets import (
     QLineEdit, QFileDialog, QMessageBox, QGroupBox, QCheckBox,
     QStackedWidget, QFrame, QListWidget, QAbstractItemView, QSpinBox,
     QTableWidget, QTableWidgetItem, QDialog, QDialogButtonBox,
-    QFormLayout, QHeaderView,
+    QFormLayout, QHeaderView, QInputDialog,
 )
 from typing import Tuple
 
@@ -1047,9 +1047,11 @@ class JmemCreatorWindow(QMainWindow):
         self.available_jmems = []  # Available JMEMs for base selection
         self.selected_base_jmems: List[str] = []  # Paths of selected base JMEMs
         self.worker_configs: List[Tuple[str, int, bool]] = []  # (device, neurons, is_big_brain)
+        self.worker_presets: Dict[str, List] = {}  # Saved worker presets
 
         self._setup_ui()
         self._load_settings()  # Load saved settings including brain_dir
+        self._refresh_preset_combo()
         self._update_button_states()
 
     def _setup_ui(self):
@@ -1218,30 +1220,25 @@ class JmemCreatorWindow(QMainWindow):
         btn_layout.addStretch()
         worker_layout.addLayout(btn_layout)
 
-        # Quick presets
+        # Presets - save/load worker configurations
         preset_layout = QHBoxLayout()
-        preset_layout.addWidget(QLabel("Quick Add:"))
+        preset_layout.addWidget(QLabel("Presets:"))
 
-        gpu_available = torch.cuda.is_available()
+        self.preset_combo = QComboBox()
+        self.preset_combo.setMinimumWidth(150)
+        preset_layout.addWidget(self.preset_combo)
 
-        self.preset_2gpu_btn = QPushButton("2× GPU 200K")
-        self.preset_2gpu_btn.clicked.connect(lambda: self._add_worker_preset('GPU', 200000, 2))
-        self.preset_2gpu_btn.setEnabled(gpu_available)
-        preset_layout.addWidget(self.preset_2gpu_btn)
+        self.load_preset_btn = QPushButton("Load")
+        self.load_preset_btn.clicked.connect(self._on_load_preset)
+        preset_layout.addWidget(self.load_preset_btn)
 
-        self.preset_4cpu_btn = QPushButton("4× CPU 200K")
-        self.preset_4cpu_btn.clicked.connect(lambda: self._add_worker_preset('CPU', 200000, 4))
-        preset_layout.addWidget(self.preset_4cpu_btn)
+        self.save_preset_btn = QPushButton("Save")
+        self.save_preset_btn.clicked.connect(self._on_save_preset)
+        preset_layout.addWidget(self.save_preset_btn)
 
-        self.preset_mixed_btn = QPushButton("2× GPU + 2× CPU")
-        self.preset_mixed_btn.clicked.connect(self._add_mixed_preset)
-        self.preset_mixed_btn.setEnabled(gpu_available)
-        preset_layout.addWidget(self.preset_mixed_btn)
-
-        self.preset_bigbrain_btn = QPushButton("+ Big Brain 500K")
-        self.preset_bigbrain_btn.setToolTip("Add a Big Brain worker (500K neurons) for difficult items")
-        self.preset_bigbrain_btn.clicked.connect(lambda: self._add_worker_to_table('CPU', 500000, True))
-        preset_layout.addWidget(self.preset_bigbrain_btn)
+        self.delete_preset_btn = QPushButton("Delete")
+        self.delete_preset_btn.clicked.connect(self._on_delete_preset)
+        preset_layout.addWidget(self.delete_preset_btn)
 
         preset_layout.addStretch()
         worker_layout.addLayout(preset_layout)
@@ -1382,6 +1379,11 @@ class JmemCreatorWindow(QMainWindow):
                     self._update_worker_table()
                     self._log(f"Restored {len(self.worker_configs)} worker configurations")
 
+                # Restore worker presets
+                if 'worker_presets' in settings:
+                    self.worker_presets = settings['worker_presets']
+                    self._log(f"Loaded {len(self.worker_presets)} worker presets")
+
             except Exception as e:
                 self._log(f"Failed to load settings: {e}")
 
@@ -1391,6 +1393,7 @@ class JmemCreatorWindow(QMainWindow):
             SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
             settings = {
                 'worker_configs': self.worker_configs,
+                'worker_presets': self.worker_presets,
             }
             if self.brain_dir:
                 settings['brain_dir'] = str(self.brain_dir)
@@ -1525,21 +1528,67 @@ class JmemCreatorWindow(QMainWindow):
         self.worker_configs.clear()
         self._update_worker_table()
 
-    def _add_worker_preset(self, device: str, neurons: int, count: int, is_big_brain: bool = False):
-        """Add multiple workers with the same configuration."""
-        for _ in range(count):
-            self.worker_configs.append((device, neurons, is_big_brain))
-        self._update_worker_table()
+    def _on_save_preset(self):
+        """Save current worker configuration as a preset."""
+        if not self.worker_configs:
+            QMessageBox.warning(self, "No Workers", "Add workers before saving a preset.")
+            return
 
-    def _add_mixed_preset(self):
-        """Add 2 GPU + 2 CPU workers."""
-        self.worker_configs.extend([
-            ('GPU', 200000, False),
-            ('GPU', 200000, False),
-            ('CPU', 200000, False),
-            ('CPU', 200000, False),
-        ])
+        name, ok = QInputDialog.getText(self, "Save Preset", "Preset name:")
+        if ok and name.strip():
+            name = name.strip()
+            if not hasattr(self, 'worker_presets'):
+                self.worker_presets = {}
+            self.worker_presets[name] = list(self.worker_configs)
+            self._refresh_preset_combo()
+            self._save_settings()
+            self._log(f"Saved preset: {name} ({len(self.worker_configs)} workers)")
+
+    def _on_load_preset(self):
+        """Load selected preset."""
+        name = self.preset_combo.currentText()
+        if not name or not hasattr(self, 'worker_presets') or name not in self.worker_presets:
+            return
+
+        gpu_available = torch.cuda.is_available()
+        self.worker_configs = []
+        skipped = 0
+        for config in self.worker_presets[name]:
+            device, neurons, is_big_brain = config
+            if device == 'GPU' and not gpu_available:
+                skipped += 1
+                continue
+            self.worker_configs.append((device, neurons, is_big_brain))
+
         self._update_worker_table()
+        msg = f"Loaded preset: {name} ({len(self.worker_configs)} workers)"
+        if skipped:
+            msg += f" - skipped {skipped} GPU workers (no GPU)"
+        self._log(msg)
+
+    def _on_delete_preset(self):
+        """Delete selected preset."""
+        name = self.preset_combo.currentText()
+        if not name or not hasattr(self, 'worker_presets') or name not in self.worker_presets:
+            return
+
+        reply = QMessageBox.question(
+            self, "Delete Preset",
+            f"Delete preset '{name}'?",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            del self.worker_presets[name]
+            self._refresh_preset_combo()
+            self._save_settings()
+            self._log(f"Deleted preset: {name}")
+
+    def _refresh_preset_combo(self):
+        """Refresh the preset dropdown."""
+        self.preset_combo.clear()
+        if hasattr(self, 'worker_presets'):
+            for name in sorted(self.worker_presets.keys()):
+                self.preset_combo.addItem(name)
 
     def _update_worker_table(self):
         """Update the worker table display."""
@@ -1984,10 +2033,10 @@ class JmemCreatorWindow(QMainWindow):
         self.add_worker_btn.setEnabled(not running)
         self.remove_worker_btn.setEnabled(not running and has_workers)
         self.clear_workers_btn.setEnabled(not running and has_workers)
-        self.preset_2gpu_btn.setEnabled(not running and torch.cuda.is_available())
-        self.preset_4cpu_btn.setEnabled(not running)
-        self.preset_mixed_btn.setEnabled(not running and torch.cuda.is_available())
-        self.preset_bigbrain_btn.setEnabled(not running)
+        self.preset_combo.setEnabled(not running)
+        self.load_preset_btn.setEnabled(not running and self.preset_combo.count() > 0)
+        self.save_preset_btn.setEnabled(not running)
+        self.delete_preset_btn.setEnabled(not running and self.preset_combo.count() > 0)
         self.worker_table.setEnabled(not running)
 
     def _log(self, msg: str):
