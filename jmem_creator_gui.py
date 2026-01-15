@@ -2037,7 +2037,10 @@ class JmemCreatorWindow(QMainWindow):
         self.load_preset_btn.setEnabled(not running and self.preset_combo.count() > 0)
         self.save_preset_btn.setEnabled(not running)
         self.delete_preset_btn.setEnabled(not running and self.preset_combo.count() > 0)
-        self.worker_table.setEnabled(not running)
+        # Keep table enabled for scrolling, just disable selection during training
+        self.worker_table.setSelectionMode(
+            QTableWidget.NoSelection if running else QTableWidget.SingleSelection
+        )
 
     def _log(self, msg: str):
         """Add message to log."""
