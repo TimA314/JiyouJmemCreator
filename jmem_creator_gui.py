@@ -1197,7 +1197,8 @@ class JmemCreatorWindow(QMainWindow):
         self.worker_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.worker_table.setSelectionMode(QTableWidget.SingleSelection)
         self.worker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        self.worker_table.setMaximumHeight(150)
+        self.worker_table.setMinimumHeight(200)
+        self.worker_table.setMaximumHeight(300)
         worker_layout.addWidget(self.worker_table)
 
         # Control buttons
