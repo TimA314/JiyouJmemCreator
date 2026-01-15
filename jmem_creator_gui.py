@@ -877,7 +877,7 @@ class PoolTrainingWorker(QThread):
 
     def __init__(
         self,
-        worker_configs: List[Tuple[str, int]],  # (device, neurons) pairs
+        worker_configs: List[Tuple[str, int, bool]],  # (device, neurons, is_big_brain)
         jcur_path: Path,
         jmem_path: Path,
         base_jmems: List[str],
@@ -902,10 +902,11 @@ class PoolTrainingWorker(QThread):
             self._pool = BrainPool(output_dir=str(shard_dir))
 
             # Add workers
-            for device, neurons in self.worker_configs:
+            for device, neurons, is_big_brain in self.worker_configs:
                 device_str = 'cuda' if device == 'GPU' else 'cpu'
-                self._pool.add_worker(device=device_str, neurons=neurons)
-                self.log_message.emit(f"[Pool] Added worker: {device}, {neurons:,} neurons")
+                self._pool.add_worker(device=device_str, neurons=neurons, is_big_brain=is_big_brain)
+                worker_type = "Big Brain" if is_big_brain else "Regular"
+                self.log_message.emit(f"[Pool] Added {worker_type} worker: {device}, {neurons:,} neurons")
 
             self.log_message.emit(f"[Pool] Starting {len(self.worker_configs)} workers...")
 
@@ -1006,6 +1007,14 @@ class AddWorkerDialog(QDialog):
 
         layout.addLayout(form)
 
+        # Big Brain checkbox
+        self.big_brain_cb = QCheckBox("Big Brain (handles difficult items)")
+        self.big_brain_cb.setToolTip(
+            "Big Brain workers handle items that regular workers struggle with.\n"
+            "Items that hit 100+ attempts get passed to Big Brain workers."
+        )
+        layout.addWidget(self.big_brain_cb)
+
         # Buttons
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel
@@ -1014,9 +1023,9 @@ class AddWorkerDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
-    def get_config(self) -> Tuple[str, int]:
-        """Get the worker configuration."""
-        return (self.device_combo.currentText(), self.neurons_spin.value())
+    def get_config(self) -> Tuple[str, int, bool]:
+        """Get the worker configuration (device, neurons, is_big_brain)."""
+        return (self.device_combo.currentText(), self.neurons_spin.value(), self.big_brain_cb.isChecked())
 
 
 # =============================================================================
@@ -1037,7 +1046,7 @@ class JmemCreatorWindow(QMainWindow):
         self.jcur_packs = []
         self.available_jmems = []  # Available JMEMs for base selection
         self.selected_base_jmems: List[str] = []  # Paths of selected base JMEMs
-        self.worker_configs: List[Tuple[str, int]] = []  # (device, neurons) pairs
+        self.worker_configs: List[Tuple[str, int, bool]] = []  # (device, neurons, is_big_brain)
 
         self._setup_ui()
         self._load_settings()  # Load saved settings including brain_dir
@@ -1183,8 +1192,8 @@ class JmemCreatorWindow(QMainWindow):
 
         # Worker table
         self.worker_table = QTableWidget()
-        self.worker_table.setColumnCount(3)
-        self.worker_table.setHorizontalHeaderLabels(["Device", "Neurons", "Status"])
+        self.worker_table.setColumnCount(4)
+        self.worker_table.setHorizontalHeaderLabels(["Device", "Neurons", "Type", "Status"])
         self.worker_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.worker_table.setSelectionMode(QTableWidget.SingleSelection)
         self.worker_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
@@ -1227,6 +1236,11 @@ class JmemCreatorWindow(QMainWindow):
         self.preset_mixed_btn.clicked.connect(self._add_mixed_preset)
         self.preset_mixed_btn.setEnabled(gpu_available)
         preset_layout.addWidget(self.preset_mixed_btn)
+
+        self.preset_bigbrain_btn = QPushButton("+ Big Brain 500K")
+        self.preset_bigbrain_btn.setToolTip("Add a Big Brain worker (500K neurons) for difficult items")
+        self.preset_bigbrain_btn.clicked.connect(lambda: self._add_worker_to_table('CPU', 500000, True))
+        preset_layout.addWidget(self.preset_bigbrain_btn)
 
         preset_layout.addStretch()
         worker_layout.addLayout(preset_layout)
@@ -1353,11 +1367,17 @@ class JmemCreatorWindow(QMainWindow):
                 # Restore worker configurations
                 if 'worker_configs' in settings:
                     gpu_available = torch.cuda.is_available()
-                    for device, neurons in settings['worker_configs']:
+                    for config in settings['worker_configs']:
+                        # Handle both old 2-tuple and new 3-tuple format
+                        if len(config) == 2:
+                            device, neurons = config
+                            is_big_brain = False
+                        else:
+                            device, neurons, is_big_brain = config
                         # Skip GPU workers if GPU not available
                         if device == 'GPU' and not gpu_available:
                             continue
-                        self.worker_configs.append((device, neurons))
+                        self.worker_configs.append((device, neurons, is_big_brain))
                     self._update_worker_table()
                     self._log(f"Restored {len(self.worker_configs)} worker configurations")
 
@@ -1484,12 +1504,12 @@ class JmemCreatorWindow(QMainWindow):
         gpu_available = torch.cuda.is_available()
         dialog = AddWorkerDialog(self, gpu_available=gpu_available)
         if dialog.exec_() == QDialog.Accepted:
-            device, neurons = dialog.get_config()
-            self._add_worker_to_table(device, neurons)
+            device, neurons, is_big_brain = dialog.get_config()
+            self._add_worker_to_table(device, neurons, is_big_brain)
 
-    def _add_worker_to_table(self, device: str, neurons: int):
+    def _add_worker_to_table(self, device: str, neurons: int, is_big_brain: bool = False):
         """Add a worker configuration to the table."""
-        self.worker_configs.append((device, neurons))
+        self.worker_configs.append((device, neurons, is_big_brain))
         self._update_worker_table()
 
     def _on_remove_worker(self):
@@ -1504,29 +1524,31 @@ class JmemCreatorWindow(QMainWindow):
         self.worker_configs.clear()
         self._update_worker_table()
 
-    def _add_worker_preset(self, device: str, neurons: int, count: int):
+    def _add_worker_preset(self, device: str, neurons: int, count: int, is_big_brain: bool = False):
         """Add multiple workers with the same configuration."""
         for _ in range(count):
-            self.worker_configs.append((device, neurons))
+            self.worker_configs.append((device, neurons, is_big_brain))
         self._update_worker_table()
 
     def _add_mixed_preset(self):
         """Add 2 GPU + 2 CPU workers."""
         self.worker_configs.extend([
-            ('GPU', 200000),
-            ('GPU', 200000),
-            ('CPU', 200000),
-            ('CPU', 200000),
+            ('GPU', 200000, False),
+            ('GPU', 200000, False),
+            ('CPU', 200000, False),
+            ('CPU', 200000, False),
         ])
         self._update_worker_table()
 
     def _update_worker_table(self):
         """Update the worker table display."""
         self.worker_table.setRowCount(len(self.worker_configs))
-        for i, (device, neurons) in enumerate(self.worker_configs):
+        for i, (device, neurons, is_big_brain) in enumerate(self.worker_configs):
             self.worker_table.setItem(i, 0, QTableWidgetItem(device))
             self.worker_table.setItem(i, 1, QTableWidgetItem(f"{neurons:,}"))
-            self.worker_table.setItem(i, 2, QTableWidgetItem("Ready"))
+            worker_type = "Big Brain" if is_big_brain else "Normal"
+            self.worker_table.setItem(i, 2, QTableWidgetItem(worker_type))
+            self.worker_table.setItem(i, 3, QTableWidgetItem("Ready"))
         self._update_button_states()
 
     def _on_worker_stats(self, per_worker: list):
@@ -1535,12 +1557,14 @@ class JmemCreatorWindow(QMainWindow):
             if i < self.worker_table.rowCount():
                 accuracy = stats.get('accuracy', 0) * 100
                 total = stats.get('total', 0)
-                status = f"{total} items, {accuracy:.0f}%"
-                item = self.worker_table.item(i, 2)
+                is_big = stats.get('is_big_brain', False)
+                prefix = "BB: " if is_big else ""
+                status = f"{prefix}{total} items, {accuracy:.0f}%"
+                item = self.worker_table.item(i, 3)
                 if item:
                     item.setText(status)
                 else:
-                    self.worker_table.setItem(i, 2, QTableWidgetItem(status))
+                    self.worker_table.setItem(i, 3, QTableWidgetItem(status))
 
     def _on_start_fresh(self):
         """Start fresh - clear JMEM and progress."""
@@ -1961,6 +1985,7 @@ class JmemCreatorWindow(QMainWindow):
         self.preset_2gpu_btn.setEnabled(not running and torch.cuda.is_available())
         self.preset_4cpu_btn.setEnabled(not running)
         self.preset_mixed_btn.setEnabled(not running and torch.cuda.is_available())
+        self.preset_bigbrain_btn.setEnabled(not running)
         self.worker_table.setEnabled(not running)
 
     def _log(self, msg: str):
