@@ -1384,6 +1384,15 @@ class JmemCreatorWindow(QMainWindow):
                     self.worker_presets = settings['worker_presets']
                     self._log(f"Loaded {len(self.worker_presets)} worker presets")
 
+                # Restore window geometry
+                if all(k in settings for k in ['window_x', 'window_y', 'window_width', 'window_height']):
+                    self.setGeometry(
+                        settings['window_x'],
+                        settings['window_y'],
+                        settings['window_width'],
+                        settings['window_height']
+                    )
+
             except Exception as e:
                 self._log(f"Failed to load settings: {e}")
 
@@ -1391,9 +1400,15 @@ class JmemCreatorWindow(QMainWindow):
         """Save settings to disk."""
         try:
             SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+            # Save window geometry
+            geo = self.geometry()
             settings = {
                 'worker_configs': self.worker_configs,
                 'worker_presets': self.worker_presets,
+                'window_x': geo.x(),
+                'window_y': geo.y(),
+                'window_width': geo.width(),
+                'window_height': geo.height(),
             }
             if self.brain_dir:
                 settings['brain_dir'] = str(self.brain_dir)
@@ -2068,6 +2083,9 @@ class JmemCreatorWindow(QMainWindow):
             JiyouBrain.clear_instance()
         except Exception:
             pass
+
+        # Save settings (including window geometry)
+        self._save_settings()
 
         # Force garbage collection
         gc.collect()
