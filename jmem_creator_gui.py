@@ -263,16 +263,33 @@ def create_or_update_manifest(
                     if count > 0:
                         memory_counts[partition][level] = count
 
-    # Count total from jmem_index if available
+    # Count total memories from index.jmem (binary format) if available
     total_memories = 0
-    jmem_index_path = jmem_path / "jmem_index" / "memories.json"
-    if jmem_index_path.exists():
+    index_jmem_path = jmem_path / "index.jmem"
+    if index_jmem_path.exists():
         try:
-            with open(jmem_index_path, 'r') as f:
-                index_data = json.load(f)
-                total_memories = index_data.get("stats", {}).get("total_memories", 0)
-        except:
+            from JiYouBrain.jmem.binary_reader import JMEMReader
+            reader = JMEMReader(str(index_jmem_path))
+            total_memories = reader.memory_count
+        except Exception:
             pass
+
+    # Fallback: try jmem_index/memories.json (legacy format)
+    if total_memories == 0:
+        jmem_index_path = jmem_path / "jmem_index" / "memories.json"
+        if jmem_index_path.exists():
+            try:
+                with open(jmem_index_path, 'r') as f:
+                    index_data = json.load(f)
+                    total_memories = index_data.get("stats", {}).get("total_memories", 0)
+            except:
+                pass
+
+    # Final fallback: sum up memory_counts from folder structure
+    if total_memories == 0 and memory_counts:
+        for partition_counts in memory_counts.values():
+            for count in partition_counts.values():
+                total_memories += count
 
     # Update manifest
     manifest["memory_counts"] = memory_counts
