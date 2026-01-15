@@ -881,6 +881,7 @@ class PoolTrainingWorker(QThread):
         jcur_path: Path,
         jmem_path: Path,
         base_jmems: List[str],
+        skip_trained: bool = True,
         parent=None,
     ):
         super().__init__(parent)
@@ -888,6 +889,7 @@ class PoolTrainingWorker(QThread):
         self.jcur_path = jcur_path
         self.jmem_path = jmem_path
         self.base_jmems = base_jmems
+        self.skip_trained = skip_trained
 
         self._pool = None
         self._stop_flag = False
@@ -948,6 +950,7 @@ class PoolTrainingWorker(QThread):
                 base_jmem=base_jmem,
                 on_progress=on_progress,
                 progress_interval=0.5,
+                skip_trained=self.skip_trained,
             )
 
             self.log_message.emit(f"[Pool] Training complete: {stats['success']}/{stats['total']} items ({stats.get('accuracy', 0):.1%})")
@@ -1292,7 +1295,7 @@ class JmemCreatorWindow(QMainWindow):
 
         self.restart_btn = QPushButton("Restart")
         self.restart_btn.clicked.connect(self._on_restart)
-        self.restart_btn.setToolTip("Stop current training and restart from beginning")
+        self.restart_btn.setToolTip("Restart from item 1 (recalibration mode - trains all items, preserves JMEM)")
         controls_layout.addWidget(self.restart_btn)
 
         controls_layout.addStretch()
@@ -1771,8 +1774,13 @@ class JmemCreatorWindow(QMainWindow):
         else:
             self._log("No new JMEMs to add")
 
-    def _on_start(self):
-        """Start training using BrainPool for parallel processing."""
+    def _on_start(self, skip_trained: bool = True):
+        """Start training using BrainPool for parallel processing.
+
+        Args:
+            skip_trained: If True, skip items already in JMEM. If False, train all
+                         items from beginning (recalibration mode).
+        """
         if self.worker and self.worker.isRunning():
             return
 
@@ -1833,6 +1841,7 @@ class JmemCreatorWindow(QMainWindow):
             jcur_path=jcur_path,
             jmem_path=jmem_path,
             base_jmems=self.selected_base_jmems.copy(),
+            skip_trained=skip_trained,
         )
 
         # Connect signals
@@ -1890,13 +1899,19 @@ class JmemCreatorWindow(QMainWindow):
                 self._log(f"Saved manifest: {manifest.get('total_memories', 0)} memories")
 
     def _on_restart(self):
-        """Stop current training and restart from beginning."""
+        """Stop current training and restart from item 1 (recalibration mode).
+
+        This trains all items without skipping, allowing fresh brains to calibrate
+        by going through items that already have JMEMs. The JMEM progress is preserved.
+        """
         # Confirm with user
         if self.worker and self.worker.isRunning():
             reply = QMessageBox.question(
-                self, "Restart Training",
-                "This will stop current training and start from the beginning.\n"
-                "Any unsaved progress will be lost.\n\n"
+                self, "Restart Training (Recalibration)",
+                "This will stop current training and restart from item 1.\n\n"
+                "• All items will be trained (no skipping)\n"
+                "• Fresh brains will calibrate on existing memories\n"
+                "• JMEM progress is preserved\n\n"
                 "Continue?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No
@@ -1905,13 +1920,13 @@ class JmemCreatorWindow(QMainWindow):
                 return
 
             # Stop current training
-            self._log("Restarting training...")
+            self._log("Restarting training (recalibration mode)...")
             self._stop_elapsed_timer()
             self.worker.stop()
             self.worker.wait(5000)  # Wait up to 5 seconds for stop
             self.worker = None
 
-        # Reset progress
+        # Reset progress display
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat("0%")
         self.accuracy_label.setText("Accuracy: 0% (0/0)")
@@ -1922,8 +1937,8 @@ class JmemCreatorWindow(QMainWindow):
         for i in range(self.worker_table.rowCount()):
             self.worker_table.setItem(i, 3, QTableWidgetItem("Ready"))
 
-        # Start fresh
-        self._on_start()
+        # Start from item 1 (recalibration mode - no skipping)
+        self._on_start(skip_trained=False)
 
     def _on_progress_update(self, current: int, total: int, lesson_name: str):
         """Handle progress update."""

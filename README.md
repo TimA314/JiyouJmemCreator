@@ -1,6 +1,6 @@
 # JMEM Creator
 
-**GUI tool for creating JMEM (Jiyou Memory) packs from curricula.**
+**GUI tool for creating JMEM (Jiyou Memory) packs from curricula using parallel training.**
 
 JMEM packs give [JiyouBrain](https://github.com/TimA314/JiyouBrain) photographic memory - instant recall of facts, vocabulary, and knowledge domains.
 
@@ -8,12 +8,13 @@ JMEM packs give [JiyouBrain](https://github.com/TimA314/JiyouBrain) photographic
 
 ## Features
 
-- Train JCUR curriculum packs into JMEM memory packs
-- Train PDF/TXT books into knowledge memories
-- Load base JMEMs as read-only context during training
-- Resume training from checkpoints
-- Real-time progress and accuracy tracking
-- Configurable CPU neuron count for different hardware
+- **Parallel Training** - Multiple brain workers train simultaneously
+- **Competitive Training** - Workers race on difficult items (Bitcoin mining inspired)
+- **Big Brain Workers** - Dedicated high-capacity workers for stubborn items
+- **Auto-Backup** - JMEM backed up every 100 memories with safety checks
+- **Recalibration Mode** - Restart training from item 1 to calibrate fresh brains
+- **Resume Support** - Continue training from checkpoints
+- **Real-time Monitoring** - Worker status, current item, attempt counts
 
 ---
 
@@ -34,38 +35,90 @@ python jmem_creator_gui.py
 
 1. Click **"Select Brain..."** and choose your JiyouBrain directory
 2. Select a JCUR curriculum from the dropdown
-3. (Optional) Add base JMEMs for compositional training
+3. Add workers using presets or **"Add Worker"** button
 4. Click **Start**
+
+---
+
+## Parallel Training
+
+### Worker Configuration
+
+| Setting | Description |
+|---------|-------------|
+| **Device** | GPU (CUDA) or CPU |
+| **Neurons** | Brain capacity (50K-2M neurons) |
+| **Big Brain** | Handles difficult items that regular workers struggle with |
+
+### Quick Presets
+
+| Preset | Configuration |
+|--------|---------------|
+| **Single GPU** | 1 GPU worker (200K neurons) |
+| **Dual GPU** | 2 GPU workers (200K each) |
+| **GPU + CPU** | 1 GPU (200K) + 1 CPU Big Brain (500K) |
+| **Research Mode** | 2 GPU (200K) + 1 CPU Big Brain (1M) |
+
+### Competitive Training System
+
+Workers compete on difficult items using a tiered escalation:
+
+| Global Attempts | Action |
+|-----------------|--------|
+| 20 | Second worker joins (max 2 workers) |
+| 100 | Big brain joins (max 3 workers) |
+| 500 | Give up, log to `problem_items.jsonl` |
+
+Workers share their best outputs as hints, and the first to achieve mastery wins.
+
+---
+
+## Worker Table
+
+The GUI displays real-time worker status:
+
+| Column | Description |
+|--------|-------------|
+| **Device** | GPU or CPU |
+| **Neurons** | Brain capacity |
+| **Type** | Regular or Big Brain |
+| **Status** | Training, Idle, Done |
+| **Current Item** | What the worker is learning |
+| **Attempts** | Local/Global attempt count |
 
 ---
 
 ## Training Modes
 
 ### JCUR Curriculum Training
-Train structured curricula with mastery-based learning. Jiyou must master each item before proceeding (up to 500 attempts per item).
+Train structured curricula with mastery-based learning. Jiyou must master each item before proceeding (up to 500 global attempts per item).
 
 ### Book Training (PDF/TXT)
-Self-supervised learning from unstructured text. Chunks the book and learns to predict character sequences.
+Self-supervised learning from unstructured text. Chunks the book and learns to predict character sequences. (Single-worker mode)
 
 ---
 
-## Settings
+## Buttons
 
-| Setting | Description |
-|---------|-------------|
-| **Use GPU** | Enable CUDA acceleration if available |
-| **Brain Mode** | Preset neuron counts (Text 200K, Standard 400K, Research 1.5M) |
-| **CPU Neurons** | Manual neuron count (50K increments) |
+| Button | Action |
+|--------|--------|
+| **Start** | Begin training (skips already-trained items) |
+| **Stop** | Gracefully stop all workers |
+| **Restart** | Recalibration mode - trains ALL items from beginning without skipping (preserves JMEM) |
 
 ---
 
 ## Output
 
-Trained JMEM packs are saved to `<brain_dir>/jiyou_packs/` with:
-- `index.jmem` - Memory index file
-- `manifest.json` - Pack metadata and dependencies
-- `training_progress.json` - Resume checkpoint
-- `training_log.jsonl` - Detailed per-trial log
+Trained JMEM packs are saved to `jmem_packs/<pack_name>/` with:
+
+| File | Description |
+|------|-------------|
+| `index.jmem` | Memory index file |
+| `manifest.json` | Pack metadata and dependencies |
+| `shards/` | Temporary worker output (merged automatically) |
+
+Backups are saved to `jmem_packs_backup/` every 100 memories.
 
 ---
 
