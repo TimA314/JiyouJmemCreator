@@ -1725,8 +1725,9 @@ class JmemCreatorWindow(QMainWindow):
 
         # Log worker configuration
         self._log(f"Starting parallel training with {len(self.worker_configs)} workers:")
-        for i, (device, neurons) in enumerate(self.worker_configs):
-            self._log(f"  Worker {i}: {device}, {neurons:,} neurons")
+        for i, (device, neurons, is_big_brain) in enumerate(self.worker_configs):
+            worker_type = "Big Brain" if is_big_brain else "Regular"
+            self._log(f"  Worker {i}: {device}, {neurons:,} neurons ({worker_type})")
 
         # Create and start pool worker
         self.worker = PoolTrainingWorker(
@@ -1744,9 +1745,9 @@ class JmemCreatorWindow(QMainWindow):
         self.worker.training_finished.connect(self._on_training_finished)
         self.worker.training_error.connect(self._on_training_error)
 
-        # Update worker status to "Initializing"
+        # Update worker status to "Initializing" (column 3 is Status)
         for i in range(self.worker_table.rowCount()):
-            self.worker_table.setItem(i, 2, QTableWidgetItem("Initializing..."))
+            self.worker_table.setItem(i, 3, QTableWidgetItem("Initializing..."))
 
         self.worker.start()
         self._start_elapsed_timer()
@@ -1817,9 +1818,9 @@ class JmemCreatorWindow(QMainWindow):
         self.elapsed_label.setText("Time: 00:00:00")
         self.lesson_label.setText("Lesson: -")
 
-        # Reset worker table status
+        # Reset worker table status (column 3 is Status)
         for i in range(self.worker_table.rowCount()):
-            self.worker_table.setItem(i, 2, QTableWidgetItem("Ready"))
+            self.worker_table.setItem(i, 3, QTableWidgetItem("Ready"))
 
         # Start fresh
         self._on_start()
