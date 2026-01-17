@@ -27,6 +27,10 @@ class Config:
     worker_configs: List[Tuple[str, int, bool]] = field(default_factory=list)
     worker_presets: Dict[str, List] = field(default_factory=dict)
 
+    # Persisted last-used paths
+    last_jcur_path: Optional[Path] = None
+    last_output_path: Optional[Path] = None
+
     # Current session settings (not persisted)
     jcur_path: Optional[Path] = None
     book_path: Optional[Path] = None
@@ -75,6 +79,16 @@ def load_settings() -> Config:
         if 'worker_presets' in settings:
             config.worker_presets = settings['worker_presets']
 
+        # Restore last-used paths
+        if 'last_jcur_path' in settings:
+            path = Path(settings['last_jcur_path'])
+            if path.exists():
+                config.last_jcur_path = path
+
+        if 'last_output_path' in settings:
+            path = Path(settings['last_output_path'])
+            config.last_output_path = path  # Output path doesn't need to exist yet
+
     except Exception as e:
         print(f"Warning: Failed to load settings: {e}")
 
@@ -101,6 +115,12 @@ def save_settings(config: Config) -> bool:
 
         if config.brain_dir:
             settings['brain_dir'] = str(config.brain_dir)
+
+        if config.last_jcur_path:
+            settings['last_jcur_path'] = str(config.last_jcur_path)
+
+        if config.last_output_path:
+            settings['last_output_path'] = str(config.last_output_path)
 
         SETTINGS_FILE.write_text(json.dumps(settings, indent=2))
         return True

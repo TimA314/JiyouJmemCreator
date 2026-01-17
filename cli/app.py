@@ -227,6 +227,11 @@ class JmemCreatorCLI:
             except Exception:
                 pass
 
+            # Save last-used paths for next time
+            self.config.last_jcur_path = self.config.jcur_path
+            self.config.last_output_path = self.config.output_path
+            save_settings(self.config)
+
             self._cleanup()
 
             if self.display:
@@ -260,6 +265,8 @@ class JmemCreatorCLI:
 
     def _cleanup(self):
         """Clean up resources."""
+        if self._pool is not None:
+            self._pool.stop_all()  # Properly shutdown workers and queue
         self._pool = None
         gc.collect()
         if torch.cuda.is_available():

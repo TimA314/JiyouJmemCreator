@@ -9,12 +9,15 @@ Usage:
     # Interactive mode (menu-driven)
     python jmem_creator_cli.py
 
-    # Direct training mode
+    # First-time training (specify all options)
     python jmem_creator_cli.py train \\
         --jcur curricula/english_core.jcur \\
         --output ~/JiYouBrain/jmem_packs/english_core \\
         --worker cuda:400000 \\
         --worker cpu:200000:big
+
+    # Continue training (uses last curriculum, output, and workers)
+    python jmem_creator_cli.py train
 
     # List available curricula
     python jmem_creator_cli.py list
@@ -63,21 +66,18 @@ Examples:
     train_parser.add_argument(
         '--jcur', '-j',
         type=Path,
-        required=True,
-        help='Path to JCUR curriculum directory'
+        help='Path to JCUR curriculum directory (uses last trained if not specified)'
     )
     train_parser.add_argument(
         '--output', '-o',
         type=Path,
-        required=True,
-        help='Output JMEM directory path'
+        help='Output JMEM directory path (uses last output if not specified)'
     )
     train_parser.add_argument(
         '--worker', '-w',
         action='append',
         dest='workers',
-        required=True,
-        help='Worker spec: device:neurons[:big] (e.g., cuda:400000, cpu:200000:big)'
+        help='Worker spec: device:neurons[:big] (e.g., cuda:400000, cpu:200000:big). Uses saved workers if not specified.'
     )
     train_parser.add_argument(
         '--base-jmem', '-b',
@@ -140,23 +140,50 @@ Examples:
                 console.print(f"[red]Error: Could not load brain from {config.brain_dir}[/red]")
                 sys.exit(1)
 
+        # Use last paths if not specified
+        jcur_path = args.jcur
+        output_path = args.output
+
+        if jcur_path is None:
+            if config.last_jcur_path and config.last_jcur_path.exists():
+                jcur_path = config.last_jcur_path
+                console.print(f"[dim]Using last curriculum: {jcur_path}[/dim]")
+            else:
+                console.print("[red]Error: No --jcur specified and no last curriculum saved.[/red]")
+                sys.exit(1)
+
+        if output_path is None:
+            if config.last_output_path:
+                output_path = config.last_output_path
+                console.print(f"[dim]Using last output: {output_path}[/dim]")
+            else:
+                console.print("[red]Error: No --output specified and no last output saved.[/red]")
+                sys.exit(1)
+
         # Validate JCUR path
-        if not args.jcur.exists():
-            console.print(f"[red]Error: JCUR not found: {args.jcur}[/red]")
+        if not jcur_path.exists():
+            console.print(f"[red]Error: JCUR not found: {jcur_path}[/red]")
             sys.exit(1)
 
-        # Parse worker configs
-        try:
-            worker_configs = [parse_worker_config(w) for w in args.workers]
-        except ValueError as e:
-            console.print(f"[red]Error: {e}[/red]")
+        # Parse worker configs (use saved if not specified)
+        if args.workers:
+            try:
+                worker_configs = [parse_worker_config(w) for w in args.workers]
+            except ValueError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                sys.exit(1)
+        elif config.worker_configs:
+            worker_configs = config.worker_configs
+            console.print(f"[dim]Using saved workers: {len(worker_configs)} worker(s)[/dim]")
+        else:
+            console.print("[red]Error: No --worker specified and no saved workers.[/red]")
             sys.exit(1)
 
         # Create CLI and run training
         cli = JmemCreatorCLI(console)
         cli.train(
-            jcur_path=args.jcur,
-            output_path=args.output.expanduser(),
+            jcur_path=jcur_path,
+            output_path=output_path.expanduser(),
             worker_configs=worker_configs,
             base_jmems=[p.expanduser() for p in (args.base_jmems or [])],
             skip_trained=not args.recalibrate,
