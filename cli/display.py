@@ -160,8 +160,8 @@ class TrainingDisplay:
                     current_item = current_item[:22] + "..."
                 status = f'"{current_item}"'
 
-            local_attempts = w.get('local_attempts', 0)
-            global_attempts = w.get('global_attempts', 0)
+            local_attempts = w.get('current_attempts', 0)
+            global_attempts = w.get('current_global_attempts', 0)
             attempts_str = f"{local_attempts}/{global_attempts}" if global_attempts else str(local_attempts)
 
             table.add_row(str(i), device, neurons_str, type_str, status, attempts_str)
