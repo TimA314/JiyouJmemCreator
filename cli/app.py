@@ -80,10 +80,11 @@ class JmemCreatorCLI:
             skip_trained: Skip items already in JMEM
             interactive: Show live display (False for non-interactive)
         """
-        self.config.jcur_path = jcur_path
-        self.config.output_path = output_path
+        # Resolve to absolute paths for persistence across working directories
+        self.config.jcur_path = jcur_path.resolve()
+        self.config.output_path = output_path.resolve()
         self.config.worker_configs = worker_configs
-        self.config.base_jmems = base_jmems or []
+        self.config.base_jmems = [p.resolve() for p in (base_jmems or [])]
         self.config.recalibrate = not skip_trained
 
         # Set up signal handler

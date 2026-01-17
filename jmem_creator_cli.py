@@ -165,6 +165,11 @@ Examples:
             console.print(f"[red]Error: JCUR not found: {jcur_path}[/red]")
             sys.exit(1)
 
+        # Save paths immediately so they persist even if training is interrupted
+        config.last_jcur_path = jcur_path.resolve()
+        config.last_output_path = output_path.expanduser().resolve()
+        save_settings(config)
+
         # Parse worker configs (use saved if not specified)
         if args.workers:
             try:
