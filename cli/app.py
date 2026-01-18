@@ -153,17 +153,34 @@ class JmemCreatorCLI:
             output_jmem = self.config.output_path / 'index.jmem'
             skip_trained = not self.config.recalibrate
 
-            # If starting fresh (not resuming), delete existing JMEM and shards
+            # If starting fresh (not resuming), ask before deleting existing JMEM
             if not skip_trained:
-                if output_jmem.exists():
-                    output_jmem.unlink()
-                    self._log("Deleted existing JMEM (starting fresh)")
-                # Also delete shards
-                if shard_dir.exists():
-                    import shutil as sh
-                    sh.rmtree(shard_dir)
-                    shard_dir.mkdir(parents=True, exist_ok=True)
-                    self._log("Cleared shard directory")
+                if output_jmem.exists() or (shard_dir.exists() and any(shard_dir.iterdir())):
+                    # SAFETY: Always ask before deleting JMEMs
+                    self.console.print(f"\n[yellow]WARNING: Starting fresh will delete existing data:[/yellow]")
+                    if output_jmem.exists():
+                        size_kb = output_jmem.stat().st_size // 1024
+                        self.console.print(f"  - {output_jmem} ({size_kb} KB)")
+                    if shard_dir.exists():
+                        shard_count = len(list(shard_dir.glob('*.jmem')))
+                        if shard_count > 0:
+                            self.console.print(f"  - {shard_count} shard file(s) in {shard_dir}")
+
+                    from rich.prompt import Confirm
+                    if not Confirm.ask("\n[bold red]Delete these files and start fresh?[/bold red]", default=False):
+                        self.console.print("[dim]Cancelled. Use --resume to continue from existing JMEM.[/dim]")
+                        return
+
+                    # User explicitly authorized deletion
+                    if output_jmem.exists():
+                        output_jmem.unlink()
+                        self._log("Deleted existing JMEM (authorized)")
+                    if shard_dir.exists():
+                        import shutil as sh
+                        sh.rmtree(shard_dir)
+                        shard_dir.mkdir(parents=True, exist_ok=True)
+                        self._log("Cleared shard directory (authorized)")
+
                 base_jmem = None
                 self._log("Starting fresh (training all items from beginning)")
             elif output_jmem.exists():
