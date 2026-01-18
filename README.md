@@ -122,6 +122,57 @@ Backups are saved to `jmem_packs_backup/` every 100 memories.
 
 ---
 
+## Curriculum Tools
+
+The `tools/` directory contains utilities for curriculum generation and conversion.
+
+### curriculum_to_jmem.py
+
+Convert a JCUR curriculum directly to JMEM format **without training**. Useful for pre-populating JMEM packs with Q&A pairs.
+
+```bash
+python tools/curriculum_to_jmem.py path/to/curriculum.jcur output.jmem
+```
+
+Options:
+- Reads all lessons from the JCUR
+- Creates JMEM entries with input/expected_output pairs
+- Generates activation embeddings using n-gram hashing
+- No brain training required
+
+### claude_curriculum_generator.py
+
+Generate JCUR curricula using Claude AI. Creates structured lesson files with Q&A pairs.
+
+```bash
+python tools/claude_curriculum_generator.py --topic "Python basics" --output python.jcur
+```
+
+### generate_coding_curriculum.py
+
+Generate programming-focused curricula with 200+ Q&A pairs covering:
+- Syntax and semantics
+- Best practices
+- Common patterns
+- Error handling
+
+---
+
+## CLI Mode
+
+For headless/scripted training:
+
+```bash
+python jmem_creator_cli.py \
+    --brain-path /path/to/JiYouBrain \
+    --curriculum curricula/english_core.jcur \
+    --output output.jmem \
+    --workers 2 \
+    --device cuda
+```
+
+---
+
 ## Related
 
 - **[JiyouBrain](https://github.com/TimA314/JiyouBrain)** - The spiking neural network
