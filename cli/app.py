@@ -151,9 +151,24 @@ class JmemCreatorCLI:
 
             # Determine base JMEM
             output_jmem = self.config.output_path / 'index.jmem'
-            if output_jmem.exists():
+            skip_trained = not self.config.recalibrate
+
+            # If starting fresh (not resuming), delete existing JMEM and shards
+            if not skip_trained:
+                if output_jmem.exists():
+                    output_jmem.unlink()
+                    self._log("Deleted existing JMEM (starting fresh)")
+                # Also delete shards
+                if shard_dir.exists():
+                    import shutil as sh
+                    sh.rmtree(shard_dir)
+                    shard_dir.mkdir(parents=True, exist_ok=True)
+                    self._log("Cleared shard directory")
+                base_jmem = None
+                self._log("Starting fresh (training all items from beginning)")
+            elif output_jmem.exists():
                 base_jmem = str(output_jmem)
-                self._log(f"Continuing from existing JMEM")
+                self._log(f"Resuming from existing JMEM ({output_jmem.stat().st_size // 1024} KB)")
             elif self.config.base_jmems:
                 # Find first base JMEM with index.jmem
                 base_jmem = None
@@ -194,7 +209,6 @@ class JmemCreatorCLI:
                         progress.update(completed, total, f"{accuracy:.1%} accuracy")
 
             # Run training
-            skip_trained = not self.config.recalibrate
             stats = self._pool.train_curriculum(
                 jcur_path=str(self.config.jcur_path),
                 output_path=str(output_jmem),

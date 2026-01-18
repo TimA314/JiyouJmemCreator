@@ -36,7 +36,7 @@ class Config:
     book_path: Optional[Path] = None
     output_path: Optional[Path] = None
     base_jmems: List[Path] = field(default_factory=list)
-    recalibrate: bool = False
+    recalibrate: bool = True  # Default: start fresh (train all items)
 
 
 def load_settings() -> Config:

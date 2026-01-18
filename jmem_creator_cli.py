@@ -50,12 +50,12 @@ Examples:
     --worker cuda:400000 \\
     --worker cpu:200000:big
 
-  # Train with recalibration (don't skip existing)
+  # Resume training (skip items already in JMEM)
   python jmem_creator_cli.py train \\
     --jcur curricula/tools.jcur \\
     --output ~/JiYouBrain/jmem_packs/tools \\
     --worker cuda:400000 \\
-    --recalibrate
+    --resume
         """
     )
 
@@ -87,9 +87,9 @@ Examples:
         help='Base JMEM path(s) for read-only context'
     )
     train_parser.add_argument(
-        '--recalibrate', '-r',
+        '--resume', '-r',
         action='store_true',
-        help='Recalibration mode: train all items (don\'t skip existing)'
+        help='Resume mode: skip items already in JMEM (default: start fresh)'
     )
     train_parser.add_argument(
         '--brain-dir',
@@ -191,7 +191,7 @@ Examples:
             output_path=output_path.expanduser(),
             worker_configs=worker_configs,
             base_jmems=[p.expanduser() for p in (args.base_jmems or [])],
-            skip_trained=not args.recalibrate,
+            skip_trained=args.resume,
             interactive=not args.no_interactive,
         )
 

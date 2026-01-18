@@ -29,6 +29,12 @@ class MainMenu:
         self.config = config
         self.console = console or Console()
 
+        # Restore last-used paths if available
+        if self.config.last_jcur_path and self.config.last_jcur_path.exists():
+            self.config.jcur_path = self.config.last_jcur_path
+        if self.config.last_output_path:
+            self.config.output_path = self.config.last_output_path
+
     def run(self) -> Optional[str]:
         """
         Run the main menu loop.
@@ -382,8 +388,8 @@ class MainMenu:
         while True:
             self.console.print("\n[bold]Settings:[/bold]")
             self.console.print("  [cyan]1[/cyan] Change Brain Directory")
-            self.console.print("  [cyan]2[/cyan] Recalibration Mode: " +
-                             ("[green]ON[/green]" if self.config.recalibrate else "[dim]OFF[/dim]"))
+            self.console.print("  [cyan]2[/cyan] Start Fresh (delete existing): " +
+                             ("[green]YES[/green]" if self.config.recalibrate else "[yellow]NO (resume)[/yellow]"))
             self.console.print("  [cyan]0[/cyan] Back")
 
             choice = Prompt.ask("Select", choices=['0', '1', '2'])
@@ -394,8 +400,10 @@ class MainMenu:
                 self._select_brain_dir()
             elif choice == '2':
                 self.config.recalibrate = not self.config.recalibrate
-                status = "enabled" if self.config.recalibrate else "disabled"
-                self.console.print(f"[green]Recalibration mode {status}[/green]")
+                if self.config.recalibrate:
+                    self.console.print("[green]Will start fresh (delete existing JMEM)[/green]")
+                else:
+                    self.console.print("[yellow]Will resume (skip existing items)[/yellow]")
 
     def _select_brain_dir(self):
         """Select brain directory."""
